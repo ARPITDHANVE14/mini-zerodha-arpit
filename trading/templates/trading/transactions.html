@@ -1,0 +1,125 @@
+{% extends 'trading/base.html' %}
+{% block title %}Transactions — Mini Zerodha{% endblock %}
+
+{% block body %}
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/dashboard/" class="nav-brand">📈 Mini <span>Zerodha</span></a>
+    <ul class="nav-links">
+      <li><a href="/dashboard/">Dashboard</a></li>
+      <li><a href="/stocks/">Stocks</a></li>
+      <li><a href="/portfolio/">Portfolio</a></li>
+      <li><a href="/transactions/" class="active">Transactions</a></li>
+    </ul>
+    <div class="nav-user">
+      <div class="balance-chip" id="balance-display">Loading...</div>
+      <button class="btn btn-outline btn-sm" onclick="Auth.logout()">Logout</button>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">Transaction History</h2>
+      <select id="filter" class="form-control" style="max-width: 150px;" onchange="filterTransactions()">
+        <option value="ALL">All</option>
+        <option value="BUY">Buy Only</option>
+        <option value="SELL">Sell Only</option>
+      </select>
+    </div>
+    <div id="transactions-content">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Date & Time</th>
+            <th>Stock</th>
+            <th>Type</th>
+            <th>Quantity</th>
+            <th>Price</th>
+            <th>Total Amount</th>
+          </tr>
+        </thead>
+        <tbody id="transactions-table">
+          <tr><td colspan="6" class="text-center">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+if (!Auth.isLoggedIn()) window.location.replace('/login/');
+
+let allTransactions = [];
+
+loadTransactions();
+
+async function loadTransactions() {
+  try {
+    const [transactions, user] = await Promise.all([
+      API.get('/api/transactions/'),
+      Auth.getUser()
+    ]);
+
+    allTransactions = transactions;
+    if (user) document.getElementById('balance-display').textContent = formatCurrency(user.balance);
+
+    if (transactions.length === 0) {
+      document.getElementById('transactions-content').innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">📝</div>
+          <div class="empty-state-title">No Transactions</div>
+          <div>Your trading history will appear here</div>
+          <button class="btn btn-primary" style="margin-top: 1rem;" onclick="window.location.href='/stocks/'">Start Trading</button>
+        </div>
+      `;
+      return;
+    }
+
+    renderTransactions(transactions);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderTransactions(transactions) {
+  document.getElementById('transactions-table').innerHTML = transactions.map(t => {
+    const isBuy = t.transaction_type === 'BUY';
+    const badge = isBuy ? 
+      '<span class="badge badge-success">BUY</span>' : 
+      '<span class="badge badge-danger">SELL</span>';
+
+    return `
+      <tr>
+        <td>${formatDateTime(t.timestamp)}</td>
+        <td>
+          <div class="stock-symbol">${t.stock.symbol}</div>
+          <div class="stock-name">${t.stock.name}</div>
+        </td>
+        <td>${badge}</td>
+        <td>${t.quantity}</td>
+        <td>${formatCurrency(t.price)}</td>
+        <td class="${isBuy ? 'text-danger' : 'text-success'}">
+          ${isBuy ? '-' : '+'}${formatCurrency(t.total_amount)}
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function filterTransactions() {
+  const filter = document.getElementById('filter').value;
+  
+  if (filter === 'ALL') {
+    renderTransactions(allTransactions);
+  } else {
+    const filtered = allTransactions.filter(t => t.transaction_type === filter);
+    renderTransactions(filtered);
+  }
+}
+</script>
+{% endblock %}

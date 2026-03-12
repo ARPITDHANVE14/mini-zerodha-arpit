@@ -1,0 +1,327 @@
+{% extends 'trading/base.html' %}
+{% load static %}
+{% block title %}Dashboard — Mini Zerodha{% endblock %}
+
+{% block body %}
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/dashboard/" class="nav-brand">📈 Mini <span>Zerodha</span></a>
+    <ul class="nav-links">
+      <li><a href="/dashboard/" class="active">Dashboard</a></li>
+      <li><a href="/stocks/">Stocks</a></li>
+      <li><a href="/portfolio/">Portfolio</a></li>
+      <li><a href="/transactions/">Transactions</a></li>
+    </ul>
+    <div class="nav-user">
+      <div class="balance-chip" id="balance-display">₹1,00,000</div>
+      <button class="btn btn-outline btn-sm" onclick="Auth.logout()">Logout</button>
+    </div>
+  </div>
+</nav>
+
+<!-- Main Content -->
+<div class="container">
+  <!-- Stats Grid -->
+  <div class="grid grid-4" id="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Total Balance</div>
+      <div class="stat-value" id="total-balance">₹0</div>
+      <div class="stat-change positive">+0.00%</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Invested</div>
+      <div class="stat-value" id="invested">₹0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Current Value</div>
+      <div class="stat-value" id="current-value">₹0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">P&L</div>
+      <div class="stat-value" id="profit-loss">₹0</div>
+      <div class="stat-change" id="pnl-percent">+0.00%</div>
+    </div>
+  </div>
+
+  <!-- Charts & Stocks -->
+  <div class="grid grid-2" style="margin-top: 1.5rem; gap: 1rem;">
+    <!-- Portfolio Chart -->
+    <div class="card" style="height: 380px; overflow: hidden;">
+      <div class="card-header">
+        <h2 class="card-title">Portfolio Distribution</h2>
+      </div>
+      <div style="height: 280px; position: relative;">
+        <canvas id="portfolio-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- Top Gainers -->
+    <div class="card" style="height: 380px; overflow: hidden;">
+      <div class="card-header">
+        <h2 class="card-title">Top Gainers</h2>
+        <span class="text-muted" style="font-size: 0.875rem;">Live updates every 10s</span>
+      </div>
+      <div id="top-gainers" style="max-height: 280px; overflow-y: auto;">
+        <div class="empty-state">
+          <div class="empty-state-icon">📊</div>
+          <div>Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent Stocks -->
+  <div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+      <h2 class="card-title">Market Overview</h2>
+      <button class="btn btn-primary btn-sm" onclick="window.location.href='/stocks/'">View All Stocks</button>
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Stock</th>
+          <th>Price</th>
+          <th>Change</th>
+          <th>Volume</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="stocks-table">
+        <tr>
+          <td colspan="5" class="text-center text-muted">Loading stocks...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Check authentication
+(function checkAuth() {
+  console.log('🔍 Dashboard: checking auth...');
+  setTimeout(() => {
+    const tokens = Auth.getTokens();
+    console.log('📦 Tokens from localStorage:', tokens);
+
+    if (!tokens || !tokens.access) {
+      console.warn('⚠️ No valid tokens found, redirecting to login');
+      window.location.replace('/login/');
+      return;
+    }
+
+    console.log('✅ Auth OK, loading dashboard...');
+    loadDashboard();
+  }, 50);
+})();
+
+let portfolioChart = null;
+
+async function loadDashboard() {
+  const user = Auth.getUser();
+  if (user) {
+    document.getElementById('balance-display').textContent = formatCurrency(user.balance);
+  }
+
+  await Promise.all([
+    loadStats(),
+    loadPortfolioChart(),
+    loadTopGainers(),
+    loadStocks(),
+  ]);
+
+  // Start live price updates
+  startPriceRefresh(async () => {
+    await loadTopGainers();
+    await loadStocks();
+  }, 10000); // Update every 10 seconds
+}
+
+async function loadStats() {
+  try {
+    const [portfolio, user] = await Promise.all([
+      API.get('/api/portfolio/'),
+      API.get('/api/auth/me/').catch(() => Auth.getUser()),
+    ]);
+
+    const balance = user.balance || 0;
+    const invested = portfolio.reduce((sum, p) => sum + parseFloat(p.invested_amount), 0);
+    const currentValue = portfolio.reduce((sum, p) => sum + parseFloat(p.current_value), 0);
+    const pnl = currentValue - invested;
+    const pnlPercent = invested > 0 ? (pnl / invested) * 100 : 0;
+    const totalBalance = balance + currentValue;
+
+    document.getElementById('total-balance').textContent = formatCurrency(totalBalance);
+    document.getElementById('invested').textContent = formatCurrency(invested);
+    document.getElementById('current-value').textContent = formatCurrency(currentValue);
+    document.getElementById('profit-loss').textContent = formatCurrency(pnl);
+    
+    const pnlPercentEl = document.getElementById('pnl-percent');
+    pnlPercentEl.textContent = `${pnl >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`;
+    pnlPercentEl.className = `stat-change ${pnl >= 0 ? 'positive' : 'negative'}`;
+  } catch (err) {
+    console.error('Error loading stats:', err);
+  }
+}
+
+async function loadPortfolioChart() {
+  try {
+    const portfolio = await API.get('/api/portfolio/');
+
+    if (portfolio.length === 0) {
+      document.getElementById('portfolio-chart').parentElement.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">📊</div>
+          <div class="empty-state-title">No Holdings Yet</div>
+          <div>Buy stocks to see your portfolio distribution</div>
+          <button class="btn btn-primary btn-sm" style="margin-top: 1rem;" onclick="window.location.href='/stocks/'">Browse Stocks</button>
+        </div>
+      `;
+      return;
+    }
+
+    const labels = portfolio.map(p => p.stock.symbol);
+    const data = portfolio.map(p => parseFloat(p.current_value));
+    const colors = ['#387ED1', '#22C55E', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6', '#F97316'];
+
+    const ctx = document.getElementById('portfolio-chart');
+    if (portfolioChart) portfolioChart.destroy();
+
+    portfolioChart = new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{
+          data,
+          backgroundColor: colors,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'right',
+            labels: { color: '#F1F5F9' },
+          },
+        },
+      },
+    });
+  } catch (err) {
+    console.error('Error loading portfolio chart:', err);
+  }
+}
+
+async function loadTopGainers() {
+  try {
+    const stocks = await API.get('/api/stocks/');
+    const gainers = stocks
+      .filter(s => parseFloat(s.day_change_percent) > 0)
+      .sort((a, b) => parseFloat(b.day_change_percent) - parseFloat(a.day_change_percent))
+      .slice(0, 5);
+
+    if (gainers.length === 0) {
+      document.getElementById('top-gainers').innerHTML = `
+        <div class="empty-state">
+          <div>No gainers today</div>
+        </div>
+      `;
+      return;
+    }
+
+    document.getElementById('top-gainers').innerHTML = gainers.map(stock => `
+      <div style="padding: 0.75rem 0; border-bottom: 1px solid var(--border);">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div class="stock-symbol">${stock.symbol}</div>
+            <div class="stock-name">${stock.name}</div>
+          </div>
+          <div style="text-align: right;">
+            <div class="price">${formatCurrency(stock.current_price)}</div>
+            <div class="change-positive">+${stock.day_change_percent}%</div>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('Error loading top gainers:', err);
+  }
+}
+
+async function loadStocks() {
+  try {
+    const stocks = await API.get('/api/stocks/');
+    const topStocks = stocks.slice(0, 10);
+
+    document.getElementById('stocks-table').innerHTML = topStocks.map(stock => {
+      const change = parseFloat(stock.day_change_percent);
+      const changeClass = change >= 0 ? 'change-positive' : 'change-negative';
+      const changeSign = change >= 0 ? '+' : '';
+
+      return `
+        <tr>
+          <td>
+            <div class="stock-symbol">${stock.symbol}</div>
+            <div class="stock-name">${stock.name}</div>
+          </td>
+          <td class="price">${formatCurrency(stock.current_price)}</td>
+          <td class="${changeClass}">${changeSign}${change.toFixed(2)}%</td>
+          <td>${formatNumber(stock.volume)}</td>
+          <td>
+            <button class="btn btn-success btn-sm" onclick="openBuyModal(${stock.id}, '${stock.symbol}', ${stock.current_price})">Buy</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  } catch (err) {
+    console.error('Error loading stocks:', err);
+  }
+}
+
+function openBuyModal(stockId, symbol, price) {
+  const content = `
+    <form id="buy-form" onsubmit="buyStock(event, ${stockId})">
+      <div class="form-group">
+        <label class="form-label">Stock: <strong>${symbol}</strong></label>
+        <div style="color: var(--text-secondary); font-size: 0.875rem;">Price: ${formatCurrency(price)}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Quantity</label>
+        <input type="number" id="quantity" class="form-control" min="1" required>
+      </div>
+      <div id="buy-error" style="color: var(--danger); font-size: 0.875rem; margin-bottom: 1rem;"></div>
+    </form>
+  `;
+
+  const actions = `
+    <button type="submit" form="buy-form" class="btn btn-success">Buy Now</button>
+    <button type="button" class="btn btn-outline" onclick="Modal.close()">Cancel</button>
+  `;
+
+  Modal.show(`Buy ${symbol}`, content, actions);
+}
+
+async function buyStock(event, stockId) {
+  event.preventDefault();
+  const quantity = document.getElementById('quantity').value;
+  const btn = event.submitter;
+
+  setLoading(btn, true);
+  document.getElementById('buy-error').textContent = '';
+
+  try {
+    await API.post('/api/transactions/buy/', { stock_id: stockId, quantity });
+    Toast.success('Success', `Bought ${quantity} shares successfully!`);
+    Modal.close();
+    loadDashboard();
+  } catch (err) {
+    const msg = err?.data?.error || 'Failed to buy stock';
+    document.getElementById('buy-error').textContent = msg;
+    setLoading(btn, false);
+  }
+}
+</script>
+{% endblock %}

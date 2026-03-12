@@ -1,0 +1,76 @@
+{% extends 'trading/base.html' %}
+{% block title %}Login — Mini Zerodha{% endblock %}
+
+{% block body %}
+<div class="auth-container">
+  <div class="auth-card animate-fadeIn">
+    <div class="auth-logo">
+      <div class="brand">📈 Mini Zerodha</div>
+      <div class="sub">India's Demo Trading Platform</div>
+    </div>
+
+    <h2 class="auth-title">Welcome back</h2>
+    <p class="auth-sub">Login to your trading account</p>
+
+    <form id="login-form" novalidate>
+      <div class="form-group">
+        <label class="form-label">Email Address</label>
+        <input type="email" id="email" name="email" class="form-control"
+               placeholder="you@example.com" required autofocus>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Password</label>
+        <input type="password" id="password" name="password" class="form-control"
+               placeholder="Enter your password" required>
+      </div>
+
+      <div id="login-error" style="color:#ef4444;font-size:13px;text-align:center;margin-bottom:12px;min-height:18px"></div>
+
+      <button type="submit" id="login-btn" class="btn btn-primary btn-full btn-lg">
+        Login →
+      </button>
+    </form>
+
+    <div class="auth-footer">
+      New here? <a href="/register/">Create account →</a>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Redirect if already logged in
+if (Auth.isLoggedIn()) {
+  window.location.replace('/dashboard/');
+}
+
+document.getElementById('login-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  document.getElementById('login-error').textContent = '';
+
+  const btn = document.getElementById('login-btn');
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+
+  if (!email || !password) {
+    document.getElementById('login-error').textContent = 'Please fill in both fields.';
+    return;
+  }
+
+  setLoading(btn, true);
+  
+  try {
+    const res = await API.post('/api/auth/login/', { email, password });
+    Toast.success('Welcome back! 🎉', 'Hello, ' + res.user.name);
+    Auth.saveAuthAndRedirect(res.tokens, res.user, '/dashboard/');
+  } catch (err) {
+    const msg = err?.data?.error || 'Invalid email or password.';
+    document.getElementById('login-error').textContent = msg;
+    setLoading(btn, false);
+  }
+});
+</script>
+{% endblock %}

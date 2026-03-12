@@ -1,0 +1,194 @@
+{% extends 'trading/base.html' %}
+{% block title %}Portfolio — Mini Zerodha{% endblock %}
+
+{% block body %}
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/dashboard/" class="nav-brand">📈 Mini <span>Zerodha</span></a>
+    <ul class="nav-links">
+      <li><a href="/dashboard/">Dashboard</a></li>
+      <li><a href="/stocks/">Stocks</a></li>
+      <li><a href="/portfolio/" class="active">Portfolio</a></li>
+      <li><a href="/transactions/">Transactions</a></li>
+    </ul>
+    <div class="nav-user">
+      <div class="balance-chip" id="balance-display">Loading...</div>
+      <button class="btn btn-outline btn-sm" onclick="Auth.logout()">Logout</button>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="grid grid-3">
+    <div class="stat-card">
+      <div class="stat-label">Total Invested</div>
+      <div class="stat-value" id="invested">₹0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Current Value</div>
+      <div class="stat-value" id="current-value">₹0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total P&L</div>
+      <div class="stat-value" id="pnl">₹0</div>
+      <div class="stat-change" id="pnl-percent">+0.00%</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+      <h2 class="card-title">My Holdings</h2>
+    </div>
+    <div id="portfolio-content">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Stock</th>
+            <th>Qty</th>
+            <th>Avg Price</th>
+            <th>Current Price</th>
+            <th>Invested</th>
+            <th>Current Value</th>
+            <th>P&L</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="portfolio-table">
+          <tr><td colspan="8" class="text-center">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+if (!Auth.isLoggedIn()) window.location.replace('/login/');
+
+loadPortfolio();
+startPriceRefresh(loadPortfolio, 10000);
+
+async function loadPortfolio() {
+  try {
+    const [portfolio, user] = await Promise.all([
+      API.get('/api/portfolio/'),
+      Auth.getUser()
+    ]);
+
+    if (user) document.getElementById('balance-display').textContent = formatCurrency(user.balance);
+
+    if (portfolio.length === 0) {
+      document.getElementById('portfolio-content').innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon">📊</div>
+          <div class="empty-state-title">No Holdings</div>
+          <div>Start trading to build your portfolio</div>
+          <button class="btn btn-primary" style="margin-top: 1rem;" onclick="window.location.href='/stocks/'">Browse Stocks</button>
+        </div>
+      `;
+      return;
+    }
+
+    const invested = portfolio.reduce((sum, p) => sum + parseFloat(p.invested_amount), 0);
+    const currentValue = portfolio.reduce((sum, p) => sum + parseFloat(p.current_value), 0);
+    const pnl = currentValue - invested;
+    const pnlPercent = invested > 0 ? (pnl / invested) * 100 : 0;
+
+    document.getElementById('invested').textContent = formatCurrency(invested);
+    document.getElementById('current-value').textContent = formatCurrency(currentValue);
+    document.getElementById('pnl').textContent = formatCurrency(pnl);
+    
+    const pnlPercentEl = document.getElementById('pnl-percent');
+    pnlPercentEl.textContent = `${pnl >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`;
+    pnlPercentEl.className = `stat-change ${pnl >= 0 ? 'positive' : 'negative'}`;
+
+    document.getElementById('portfolio-table').innerHTML = portfolio.map(p => {
+      const pnlVal = parseFloat(p.profit_loss);
+      const pnlPercentVal = parseFloat(p.profit_loss_percent);
+      const pnlClass = pnlVal >= 0 ? 'text-success' : 'text-danger';
+
+      return `
+        <tr>
+          <td>
+            <div class="stock-symbol">${p.stock.symbol}</div>
+            <div class="stock-name">${p.stock.name}</div>
+          </td>
+          <td>${p.quantity}</td>
+          <td>${formatCurrency(p.average_price)}</td>
+          <td class="price">${formatCurrency(p.stock.current_price)}</td>
+          <td>${formatCurrency(p.invested_amount)}</td>
+          <td>${formatCurrency(p.current_value)}</td>
+          <td class="${pnlClass}">
+            <div>${formatCurrency(pnlVal)}</div>
+            <div style="font-size: 0.875rem;">${pnlVal >= 0 ? '+' : ''}${pnlPercentVal.toFixed(2)}%</div>
+          </td>
+          <td>
+            <button class="btn btn-danger btn-sm" onclick="openSellModal(${p.stock.id}, '${p.stock.symbol}', ${p.stock.current_price}, ${p.quantity})">Sell</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function openSellModal(stockId, symbol, price, maxQty) {
+  const content = `
+    <form id="sell-form" onsubmit="sellStock(event, ${stockId}, ${maxQty})">
+      <div class="form-group">
+        <label class="form-label">Stock: <strong>${symbol}</strong></label>
+        <div style="color: var(--text-secondary); font-size: 0.875rem;">
+          Price: ${formatCurrency(price)} | You own: ${maxQty} shares
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Quantity</label>
+        <input type="number" id="quantity" class="form-control" min="1" max="${maxQty}" required autofocus>
+      </div>
+      <div id="sell-error" style="color: var(--danger); font-size: 0.875rem;"></div>
+    </form>
+  `;
+
+  const actions = `
+    <button type="submit" form="sell-form" class="btn btn-danger">Sell Now</button>
+    <button type="button" class="btn btn-outline" onclick="Modal.close()">Cancel</button>
+  `;
+
+  Modal.show(`Sell ${symbol}`, content, actions);
+}
+
+async function sellStock(event, stockId, maxQty) {
+  event.preventDefault();
+  const quantity = parseInt(document.getElementById('quantity').value);
+  const btn = event.submitter;
+
+  if (quantity > maxQty) {
+    document.getElementById('sell-error').textContent = `You only own ${maxQty} shares`;
+    return;
+  }
+
+  setLoading(btn, true);
+  document.getElementById('sell-error').textContent = '';
+
+  try {
+    const res = await API.post('/api/transactions/sell/', { stock_id: stockId, quantity });
+    Toast.success('Success', res.message);
+    Modal.close();
+    
+    // Update balance
+    const user = Auth.getUser();
+    user.balance = res.new_balance;
+    Auth.setUser(user);
+    document.getElementById('balance-display').textContent = formatCurrency(res.new_balance);
+    
+    loadPortfolio();
+  } catch (err) {
+    document.getElementById('sell-error').textContent = err?.data?.error || 'Failed to sell stock';
+    setLoading(btn, false);
+  }
+}
+</script>
+{% endblock %}

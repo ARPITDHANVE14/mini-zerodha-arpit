@@ -1,0 +1,151 @@
+{% extends 'trading/base.html' %}
+{% block title %}Stocks — Mini Zerodha{% endblock %}
+
+{% block body %}
+<nav class="navbar">
+  <div class="nav-container">
+    <a href="/dashboard/" class="nav-brand">📈 Mini <span>Zerodha</span></a>
+    <ul class="nav-links">
+      <li><a href="/dashboard/">Dashboard</a></li>
+      <li><a href="/stocks/" class="active">Stocks</a></li>
+      <li><a href="/portfolio/">Portfolio</a></li>
+      <li><a href="/transactions/">Transactions</a></li>
+    </ul>
+    <div class="nav-user">
+      <div class="balance-chip" id="balance-display">Loading...</div>
+      <button class="btn btn-outline btn-sm" onclick="Auth.logout()">Logout</button>
+    </div>
+  </div>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <div class="card-header">
+      <h2 class="card-title">All Stocks</h2>
+      <input type="text" id="search" class="form-control" placeholder="Search stocks..." style="max-width: 300px;" oninput="filterStocks()">
+    </div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Stock</th>
+          <th>Sector</th>
+          <th>Price</th>
+          <th>Change</th>
+          <th>Volume</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="stocks-table">
+        <tr><td colspan="6" class="text-center">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+if (!Auth.isLoggedIn()) window.location.replace('/login/');
+
+let allStocks = [];
+
+loadStocks();
+startPriceRefresh(loadStocks, 10000);
+
+async function loadStocks() {
+  try {
+    const [stocks, user] = await Promise.all([
+      API.get('/api/stocks/'),
+      API.get('/api/portfolio/').then(() => Auth.getUser()).catch(() => Auth.getUser())
+    ]);
+
+    allStocks = stocks;
+    if (user) document.getElementById('balance-display').textContent = formatCurrency(user.balance);
+    renderStocks(stocks);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderStocks(stocks) {
+  document.getElementById('stocks-table').innerHTML = stocks.map(stock => {
+    const change = parseFloat(stock.day_change_percent);
+    const changeClass = change >= 0 ? 'change-positive' : 'change-negative';
+    const changeSign = change >= 0 ? '+' : '';
+
+    return `
+      <tr>
+        <td>
+          <div class="stock-symbol">${stock.symbol}</div>
+          <div class="stock-name">${stock.name}</div>
+        </td>
+        <td>${stock.sector || '-'}</td>
+        <td class="price">${formatCurrency(stock.current_price)}</td>
+        <td class="${changeClass}">${changeSign}${change.toFixed(2)}%</td>
+        <td>${formatNumber(stock.volume)}</td>
+        <td>
+          <button class="btn btn-success btn-sm" onclick="openBuyModal(${stock.id}, '${stock.symbol}', ${stock.current_price})">Buy</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function filterStocks() {
+  const search = document.getElementById('search').value.toLowerCase();
+  const filtered = allStocks.filter(s => 
+    s.symbol.toLowerCase().includes(search) || 
+    s.name.toLowerCase().includes(search)
+  );
+  renderStocks(filtered);
+}
+
+function openBuyModal(stockId, symbol, price) {
+  const content = `
+    <form id="buy-form" onsubmit="buyStock(event, ${stockId})">
+      <div class="form-group">
+        <label class="form-label">Stock: <strong>${symbol}</strong></label>
+        <div style="color: var(--text-secondary); font-size: 0.875rem;">Price: ${formatCurrency(price)}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Quantity</label>
+        <input type="number" id="quantity" class="form-control" min="1" required autofocus>
+      </div>
+      <div id="buy-error" style="color: var(--danger); font-size: 0.875rem;"></div>
+    </form>
+  `;
+
+  const actions = `
+    <button type="submit" form="buy-form" class="btn btn-success">Buy Now</button>
+    <button type="button" class="btn btn-outline" onclick="Modal.close()">Cancel</button>
+  `;
+
+  Modal.show(`Buy ${symbol}`, content, actions);
+}
+
+async function buyStock(event, stockId) {
+  event.preventDefault();
+  const quantity = document.getElementById('quantity').value;
+  const btn = event.submitter;
+
+  setLoading(btn, true);
+  document.getElementById('buy-error').textContent = '';
+
+  try {
+    const res = await API.post('/api/transactions/buy/', { stock_id: stockId, quantity });
+    Toast.success('Success', res.message);
+    Modal.close();
+    
+    // Update balance
+    const user = Auth.getUser();
+    user.balance = res.new_balance;
+    Auth.setUser(user);
+    document.getElementById('balance-display').textContent = formatCurrency(res.new_balance);
+  } catch (err) {
+    document.getElementById('buy-error').textContent = err?.data?.error || 'Failed to buy stock';
+    setLoading(btn, false);
+  }
+}
+</script>
+{% endblock %}
